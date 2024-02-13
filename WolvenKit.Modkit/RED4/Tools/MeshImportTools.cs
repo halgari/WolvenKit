@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -6,6 +7,7 @@ using System.Text;
 using SharpGLTF.Schema2;
 using WolvenKit.Common.Model.Arguments;
 using WolvenKit.Core.Extensions;
+using WolvenKit.Modkit.Extensions;
 using WolvenKit.Modkit.RED4.GeneralStructs;
 using WolvenKit.Modkit.RED4.RigFile;
 using WolvenKit.Modkit.RED4.Tools;
@@ -674,18 +676,52 @@ namespace WolvenKit.Modkit.RED4
             }
 
             meshContainer.garmentMorph = Array.Empty<Vec3>();
-            // TODO: https://github.com/WolvenKit/WolvenKit/issues/1506
-            //       Mesh Import Needs to Actually Check it's Working with GarmentSupport Targets.
-            //       For now we'll keep assuming GS is at index 0
-            if (mesh.Primitives[0].MorphTargetsCount > 0)
-            {
-                var idx = mesh.Primitives[0].GetMorphTargetAccessors(0).Keys.ToList().IndexOf("POSITION");
-                var extraDataList = mesh.Primitives[0].GetMorphTargetAccessors(0).Values.ToList()[idx].AsVector3Array().ToList();
 
-                meshContainer.garmentMorph = extraDataList.Select(p => new Vec3(p.X, -p.Z, p.Y)).ToArray();
+            if (mesh.Extras.TryGetNode(out var targetNamesObj, "targetNames") && targetNamesObj.Content is IList targetNames)
+            {
+                if (targetNames.Count != mesh.Primitives[0].MorphTargetsCount)
+                {
+                    throw new Exception();
+                }
+                
+                for (var i = 0; i < targetNames.Count; i++)
+                {
+                    if (targetNames[i] is "GarmentSupport")
+                    {
+                        meshContainer.garmentMorph = GetVector3List(i, "POSITION").Select(p => new Vec3(p.X, -p.Z, p.Y)).ToArray();
+                    }
+                    else if (targetNames[i] is "VehicleDamageSupport")
+                    {
+                        meshContainer.vehDmgNormals = GetVector3List(i, "NORMAL").Select(p => new Vec3(p.X, -p.Z, p.Y)).ToArray();
+                        for (var j = 0; j < meshContainer.vehDmgNormals.Length; j++)
+                        {
+                            meshContainer.vehDmgNormals[j] = new Vec3(
+                                meshContainer.vehDmgNormals[j].X + meshContainer.normals[j].X, 
+                                meshContainer.vehDmgNormals[j].Y + meshContainer.normals[j].Y, 
+                                meshContainer.vehDmgNormals[j].Z + meshContainer.normals[j].Z);
+                        }
+
+                        meshContainer.vehDmgPositions = GetVector3List(i, "POSITION").Select(p => new Vec3(p.X, -p.Z, p.Y)).ToArray();
+                        for (var j = 0; j < meshContainer.vehDmgPositions.Length; j++)
+                        {
+                            meshContainer.vehDmgPositions[j] = new Vec3(
+                                meshContainer.vehDmgPositions[j].X + meshContainer.positions[j].X,
+                                meshContainer.vehDmgPositions[j].Y + meshContainer.positions[j].Y,
+                                meshContainer.vehDmgPositions[j].Z + meshContainer.positions[j].Z);
+                        }
+                    }
+                }
             }
 
             return meshContainer;
+
+            List<Vec3> GetVector3List(int morphTargetIndex, string attributeKey)
+            {
+                var idx = mesh.Primitives[0].GetMorphTargetAccessors(morphTargetIndex).Keys.ToList().IndexOf(attributeKey);
+                var extraDataList = mesh.Primitives[0].GetMorphTargetAccessors(morphTargetIndex).Values.ToList()[idx].AsVector3Array().ToList();
+                
+                return extraDataList;
+            }
         }
 
         private static Re4MeshContainer RawMeshToRE4Mesh(RawMeshContainer mesh, Vec4 qScale, Vec4 qTrans)
@@ -705,6 +741,8 @@ namespace WolvenKit.Modkit.RED4
             ArgumentNullException.ThrowIfNull(mesh.weights);
             ArgumentNullException.ThrowIfNull(mesh.garmentMorph);
             ArgumentNullException.ThrowIfNull(mesh.indices);
+            ArgumentNullException.ThrowIfNull(mesh.vehDmgNormals);
+            ArgumentNullException.ThrowIfNull(mesh.vehDmgPositions);
 
             var vertCount = mesh.positions.Length;
             re4Mesh.ExpVerts = new short[vertCount, 3];
@@ -793,6 +831,25 @@ namespace WolvenKit.Modkit.RED4
                 }
             }
 
+            re4Mesh.vehDmgNor32s = new uint[0];
+            re4Mesh.vehDmgPos = new float[0,0];
+            if (mesh.vehDmgNormals.Length > 0)
+            {
+                re4Mesh.vehDmgNor32s = new uint[vertCount];
+                re4Mesh.vehDmgPos = new float[vertCount, 4];
+                
+                for (var i = 0; i < vertCount; i++)
+                {
+                    var v = new Vec4(mesh.vehDmgNormals[i], 0); // for normal w == 0
+                    re4Mesh.vehDmgNor32s[i] = Converters.Vec4ToU32(v);
+
+                    re4Mesh.vehDmgPos[i, 0] = mesh.vehDmgPositions[i].X / 100;
+                    re4Mesh.vehDmgPos[i, 1] = mesh.vehDmgPositions[i].Y / 100;
+                    re4Mesh.vehDmgPos[i, 2] = mesh.vehDmgPositions[i].Z / 100;
+                    re4Mesh.vehDmgPos[i, 3] = 0;
+                }
+            }
+            
             re4Mesh.indices = new ushort[mesh.indices.Length];
             for (var i = 0; i < mesh.indices.Length; i++)
             {
@@ -827,6 +884,8 @@ namespace WolvenKit.Modkit.RED4
                 ArgumentNullException.ThrowIfNull(expMesh.Tan32s);
                 ArgumentNullException.ThrowIfNull(expMesh.colors);
                 ArgumentNullException.ThrowIfNull(expMesh.uv1s);
+                ArgumentNullException.ThrowIfNull(expMesh.vehDmgNor32s);
+                ArgumentNullException.ThrowIfNull(expMesh.vehDmgPos);
 
                 var vertCount = expMesh.ExpVerts.Length / 3;
 
@@ -922,6 +981,25 @@ namespace WolvenKit.Modkit.RED4
                 // 16 bytes Padding if necessary
                 paddingLen = ((ms.Length + 15U) & (~15)) - ms.Length;
                 bw.Write(new byte[paddingLen]);
+
+                if (expMesh.vehDmgNor32s.Length > 0)
+                {
+                    meshesInfo.unknownOffsets[i] = (uint)ms.Position;
+
+                    for (var e = 0; e < vertCount; e++)
+                    {
+                        bw.Write(expMesh.vehDmgNor32s[e]);
+                        
+                        bw.Write(expMesh.vehDmgPos[e, 0]);
+                        bw.Write(expMesh.vehDmgPos[e, 1]);
+                        bw.Write(expMesh.vehDmgPos[e, 2]);
+                        bw.Write(expMesh.vehDmgPos[e, 3]);
+                    }
+
+                    // 16 bytes Padding if necessary
+                    paddingLen = ((ms.Length + 15U) & (~15)) - ms.Length;
+                    bw.Write(new byte[paddingLen]);
+                }
 
                 // for the unusual lightblocker data
                 /*
@@ -1097,7 +1175,8 @@ namespace WolvenKit.Modkit.RED4
                 chunk.ChunkVertices.VertexLayout.SlotStrides.Add(8);
                 chunk.ChunkVertices.VertexLayout.SlotStrides.Add(8);
 
-                chunk.ChunkVertices.VertexLayout.SlotStrides.Add(info.unknownOffsets[i] == 0 ? (byte)0 : (byte)4);
+                // temp. Change to 20 since 4 seems not used at all
+                chunk.ChunkVertices.VertexLayout.SlotStrides.Add(info.unknownOffsets[i] == 0 ? (byte)0 : (byte)20);
 
                 chunk.ChunkVertices.VertexLayout.SlotStrides.Add(0);
                 chunk.ChunkVertices.VertexLayout.SlotStrides.Add(0);
@@ -1267,7 +1346,7 @@ namespace WolvenKit.Modkit.RED4
                 // LightBlockerIntensity
                 if (info.unknownOffsets[i] != 0)
                 {
-                    chunk.ChunkVertices.VertexLayout.Elements.Add(new GpuWrapApiVertexPackingPackingElement
+                    /*chunk.ChunkVertices.VertexLayout.Elements.Add(new GpuWrapApiVertexPackingPackingElement
                     {
                         StreamIndex = 4,
                         UsageIndex = 0,
@@ -1277,7 +1356,25 @@ namespace WolvenKit.Modkit.RED4
                     });
 
                     // for lightblocker its 24, after testing some files, somtimes unknownoffsets[4] is used for destruction indices and some paint instead of lightblocker, so this needs to be taken care of
-                    chunk.VertexFactory += 24;
+                    chunk.VertexFactory += 24;*/
+
+                    chunk.ChunkVertices.VertexLayout.Elements.Add(new GpuWrapApiVertexPackingPackingElement
+                    {
+                        StreamIndex = 4,
+                        UsageIndex = 0,
+                        Usage = Enums.GpuWrapApiVertexPackingePackingUsage.PS_VehicleDmgNormal,
+                        Type = Enums.GpuWrapApiVertexPackingePackingType.PT_Dec4
+                    });
+
+                    chunk.ChunkVertices.VertexLayout.Elements.Add(new GpuWrapApiVertexPackingPackingElement
+                    {
+                        StreamIndex = 4,
+                        UsageIndex = 0,
+                        Usage = Enums.GpuWrapApiVertexPackingePackingUsage.PS_VehicleDmgPosition,
+                        Type = Enums.GpuWrapApiVertexPackingePackingType.PT_Float4
+                    });
+
+                    chunk.VertexFactory += 21;
                 }
 
 

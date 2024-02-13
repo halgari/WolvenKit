@@ -114,6 +114,8 @@ namespace WolvenKit.Modkit.RED4.GeneralStructs
         public string? name { get; set; }
         public uint weightcount { get; set; }
         public ushort[,]? garmentMorph { get; set; }
+        public uint[]? vehDmgNor32s { get; set; }
+        public float[,]? vehDmgPos { get; set; }
     }
 
     public class RawTargetContainer
