@@ -66,6 +66,7 @@ public partial class ChunkViewModel : ObservableObject, ISelectableTreeViewItemM
     private readonly ITweakDBService _tweakDbService;
     private readonly ILocKeyService _locKeyService;
     private readonly Red4ParserService _parserService;
+    private readonly CRUIDService _cruidService;
 
     private static readonly List<string> s_hiddenProperties = new() 
     { 
@@ -102,6 +103,7 @@ public partial class ChunkViewModel : ObservableObject, ISelectableTreeViewItemM
         ITweakDBService tweakDbService,
         ILocKeyService locKeyService,
         Red4ParserService parserService,
+        CRUIDService cruidService,
         ChunkViewModel? parent = null,
         bool isReadOnly = false
     )
@@ -117,6 +119,7 @@ public partial class ChunkViewModel : ObservableObject, ISelectableTreeViewItemM
         _tweakDbService = tweakDbService;
         _locKeyService = locKeyService;
         _parserService = parserService;
+        _cruidService = cruidService;
 
         _appViewModel = appViewModel;
         _data = data;
@@ -158,11 +161,12 @@ public partial class ChunkViewModel : ObservableObject, ISelectableTreeViewItemM
         ITweakDBService tweakDbService,
         ILocKeyService locKeyService,
         Red4ParserService parserService,
+        CRUIDService cruidService,
         bool isReadOnly = false
         ) 
         : this(data, nameof(RDTDataViewModel), appViewModel,
             chunkViewmodelFactory, tabViewmodelFactory, hashService, loggerService, projectManager,
-            gameController, settingsManager, archiveManager, tweakDbService, locKeyService, parserService, null,
+            gameController, settingsManager, archiveManager, tweakDbService, locKeyService, parserService, cruidService, null,
             isReadOnly
               )
     {
@@ -192,11 +196,12 @@ public partial class ChunkViewModel : ObservableObject, ISelectableTreeViewItemM
         ITweakDBService tweakDbService,
         ILocKeyService locKeyService,
         Red4ParserService parserService,
+        CRUIDService cruidService,
         bool isReadOnly = false
         ) 
         : this(export, nameof(ReferenceSocket), appViewModel,
               chunkViewmodelFactory, tabViewmodelFactory, hashService, loggerService, projectManager,
-              gameController, settingsManager, archiveManager, tweakDbService, locKeyService, parserService, null, isReadOnly
+              gameController, settingsManager, archiveManager, tweakDbService, locKeyService, parserService, cruidService, null, isReadOnly
               )
     {
         Socket = socket;
@@ -433,6 +438,16 @@ public partial class ChunkViewModel : ObservableObject, ISelectableTreeViewItemM
 
     public bool ShouldShowArrayOps => IsInArray || IsArray;
 
+    // If shift is not being held and we're a CMeshMaterialEntry or a WorldCompiledEffectPlacemenentInfo, 
+    // show "Duplicate as new item" instead of "Duplicate Selection" 
+    public bool ShouldShowDuplicateAsNew()
+    {
+        if (IsShiftBeingHeld || !IsInArray) return false;
+        return ResolvedData is worldCompiledEffectPlacementInfo || ResolvedData is CMeshMaterialEntry;
+    }
+
+    public bool ShouldShowDuplicate => IsInArray && !ShouldShowDuplicateAsNew();
+
     // When shift is not held, paste into array
     public bool ShouldShowPasteIntoArray => ShouldShowArrayOps && !IsShiftBeingHeld;
 
@@ -629,7 +644,7 @@ public partial class ChunkViewModel : ObservableObject, ISelectableTreeViewItemM
 
     public string ResolvedType => ResolvedPropertyType is not null ? GetTypeRedName(ResolvedPropertyType) ?? ResolvedPropertyType.Name : "";
 
-    public bool TypesDiffer => PropertyType != ResolvedPropertyType;
+    public bool TypesDiffer => PropertyType != ResolvedPropertyType || IsValueExtrapolated;
 
     public bool IsInArray => Parent is not null && Parent.IsArray;
 
@@ -1831,6 +1846,13 @@ public partial class ChunkViewModel : ObservableObject, ISelectableTreeViewItemM
         }
     }
 
+    [RelayCommand(CanExecute = nameof(CanDuplicateChunk))]
+    private void DuplicateAsNewChunk()
+    {
+        DuplicateChunk();
+        Parent?.GetChildNode(NodeIdxInParent + 1)?.AdjustPropertiesAfterPasteAsNewItem();
+    }
+
     private bool CanCopySelection() => IsInArray && Parent is not null;   // TODO RelayCommand check notify
     [RelayCommand(CanExecute = nameof(CanCopySelection))]
     private void CopySelection()
@@ -1993,6 +2015,19 @@ public partial class ChunkViewModel : ObservableObject, ISelectableTreeViewItemM
         catch (Exception ex) { _loggerService.Error(ex); }
     }
 
+    private bool CanGenerateCRUID() => PropertyType == typeof(CRUID);
+
+    [RelayCommand(CanExecute = nameof(CanGenerateCRUID))]
+    private void GenerateCRUID()
+    {
+        if (!CanGenerateCRUID())
+        {
+            return;
+        }
+        
+        Data = _cruidService.GenerateNewCRUID();
+    }
+
     #endregion
 
     #region methods
@@ -2079,6 +2114,7 @@ public partial class ChunkViewModel : ObservableObject, ISelectableTreeViewItemM
         else if (ResolvedData is CMeshMaterialEntry materialDefinition)
         {
             Value = materialDefinition.IsLocalInstance ? "" : " (external)";
+            Value = $"{materialDefinition.Index}{Value}";
             IsValueExtrapolated = true;
         }
         else if (NodeIdxInParent > -1 && ResolvedData is physicsRagdollBodyInfo &&
@@ -2403,6 +2439,11 @@ public partial class ChunkViewModel : ObservableObject, ISelectableTreeViewItemM
             {
                 Descriptor = desc;
             }
+        }
+        else if (ResolvedData is entEffectDesc desc && desc.EffectName is CName name)
+        {
+            Descriptor = name;
+            return;
         }
         // mesh: boneTransforms (in different coordinate spaces)
         else if (NodeIdxInParent > -1 &&
@@ -2983,6 +3024,22 @@ public partial class ChunkViewModel : ObservableObject, ISelectableTreeViewItemM
         return false;
     }
 
+    /// <summary>
+    /// Will return a ChunkViewModel if the node is an array and the index is valid
+    /// </summary>
+    /// <param name="index">numeric index of target node</param>
+    /// <returns>ChunkViewModel or null</returns>
+    public ChunkViewModel? GetChildNode(int index)
+    {
+        if (!IsArray || TVProperties is not ObservableCollectionExtended<ChunkViewModel> children ||
+            index >= children.Count)
+        {
+            return null;
+        }
+
+        return children[index];
+    }
+
     public bool InsertChild(int index, IRedType item)
     {
         try
@@ -3090,7 +3147,52 @@ public partial class ChunkViewModel : ObservableObject, ISelectableTreeViewItemM
             return true;
         }
         catch (Exception ex) { _loggerService.Error(ex); }
+
         return false;
+    }
+
+    /*
+     * QOL: Increment index property in new child
+     */
+    private void AdjustPropertiesAfterPasteAsNewItem()
+    {
+        if (ResolvedData is RedDummy || IsShiftBeingHeld || Parent?.ResolvedData is not IRedArray)
+        {
+            return;
+        }
+
+        switch (Parent.ResolvedData)
+        {
+            // For placement tags: set PlacementTagIndex to previous sibling's plus one
+            case CArray<worldCompiledEffectPlacementInfo> infoArray when
+                ResolvedData is worldCompiledEffectPlacementInfo info:
+
+                var effectsIndex = infoArray
+                    .OrderBy(mat => Int32.Parse(mat.PlacementTagIndex.ToString()))
+                    .Select(mat => mat.PlacementTagIndex)
+                    .Last();
+                info.PlacementTagIndex = effectsIndex + 1;
+                break;
+
+            // For material definitions: Find highest index of local/external material and increment by one
+            case CArray<CMeshMaterialEntry> materialDefinitionArray when
+                ResolvedData is CMeshMaterialEntry materialDefinition:
+            {
+                var materialIndex = materialDefinitionArray
+                    .Where(mat => mat.IsLocalInstance.Equals(materialDefinition.IsLocalInstance))
+                    .OrderBy(mat => Int32.Parse(mat.Index.ToString()))
+                    .Select(mat => mat.Index)
+                    .Last();
+                materialDefinition.Index = materialIndex + 1;
+                break;
+            }
+            default:
+                return;
+        }
+
+        RecalculateProperties();
+        CalculateValue();
+        CalculateDescriptor();
     }
 
     public void RecalculateProperties(IRedType? selectChild = null, bool expand = true)
@@ -3106,20 +3208,23 @@ public partial class ChunkViewModel : ObservableObject, ISelectableTreeViewItemM
 
         IsExpanded = expand;
 
-        if (expand && selectChild is not null)
+        if (!expand || selectChild is null)
         {
-            foreach (var prop in Properties)
-            {
-                if (prop.Data is not null && prop.Data.GetHashCode() == selectChild.GetHashCode())
-                {
-                    prop.IsExpanded = true;
-                    if (Tab is RDTDataViewModel dvm)
-                    {
-                        dvm.SelectedChunk = prop;
-                    }
-                    break;
-                }
-            }
+            return;
+        }
+
+        var prop = Properties.FirstOrDefault(p => p.Data != null && p.Data.GetHashCode() == selectChild.GetHashCode());
+        if (prop == null)
+        {
+            return;
+        }
+
+        prop.IsExpanded = true;
+        prop.SetChildExpansionStates(true);
+
+        if (Tab is RDTDataViewModel dvm)
+        {
+            dvm.SelectedChunk = prop;
         }
     }
 

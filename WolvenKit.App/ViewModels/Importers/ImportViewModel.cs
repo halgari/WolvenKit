@@ -131,8 +131,7 @@ public partial class ImportViewModel : AbstractImportViewModel
             return;
         }
 
-        var proj = _projectManager.ActiveProject;
-        if (proj is null)
+        if (_archiveManager.ProjectArchive is not FileSystemArchive projectArchive)
         {
             _loggerService.Error("No project loaded!");
             return;
@@ -153,8 +152,6 @@ public partial class ImportViewModel : AbstractImportViewModel
 
         //prepare a list of failed items
         var failedItems = new List<string>();
-
-        var projectArchive = proj.AsArchive();
 
         var toBeImported = Items
             .Where(_ => all || _.IsChecked)
@@ -223,9 +220,7 @@ public partial class ImportViewModel : AbstractImportViewModel
 
         if (_gameController.GetController() is RED4Controller cp77Controller)
         {
-            OpusTools opusTools = new(proj.ModDirectory, proj.RawDirectory, _archiveManager, true);
-
-            return Task.Run(() => opusTools.ImportWavs(wavs.ToArray()));
+            return Task.Run(() => OpusTools.ImportWavs(_archiveManager, wavs, new DirectoryInfo(proj.RawDirectory), new DirectoryInfo(proj.ModDirectory)));
         }
 
         return Task.FromResult(false);
@@ -246,7 +241,7 @@ public partial class ImportViewModel : AbstractImportViewModel
         }
 
         var settings = new GlobalImportArgs().Register(prop);
-        if (!_importExportHelper.Finalize(prop, settings, projectArchive))
+        if (!_importExportHelper.Finalize(prop, settings))
         {
             return false;
         }
