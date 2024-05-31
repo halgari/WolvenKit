@@ -788,7 +788,17 @@ internal static class BufferHelper
     {
         writer.WriteNumber("Flags", value.Buffer.Flags);
 
-        if (value.Buffer.Data is CookedInstanceTransformsBuffer or CR2WList or RedPackage or worldNodeDataBuffer or WorldTransformsBuffer or CollisionBuffer or CR2WWrapper or FoliageBuffer or AnimFacialSetupBakedDataBuffer or AnimFacialSetupMainPosesDataBuffer or AnimFacialSetupCorrectivePosesDataBuffer)
+        // TODO: Check why some aren't written... I did it but forgot why -.- | S. Eberoth
+        var ignoredTypes = new List<Type>
+        {
+            typeof(CGIDataBuffer),
+            typeof(GeometryCacheBuffer),
+            typeof(ModifiersBuffer),
+            typeof(SavedModifierGroupStatTypesBuffer),
+            typeof(TilesBuffer)
+        };
+
+        if (value.Buffer.Data != null && !ignoredTypes.Contains(value.Buffer.Data.GetType()))
         {
             writer.WriteString("Type", value.Buffer.Data.GetType().AssemblyQualifiedName);
 

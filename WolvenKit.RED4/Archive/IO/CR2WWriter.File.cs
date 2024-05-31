@@ -454,6 +454,18 @@ public partial class CR2WWriter
 
             buffer.SetBytes(newData);
         }
+
+        if (buffer.Data is MinimapEncodedShapesBuffer minimapEncodedShapesBuffer)
+        {
+            using var ms = new MemoryStream();
+            using var writer = new MinimapEncodedShapesWriter(ms);
+
+            writer.WriteBuffer(minimapEncodedShapesBuffer, (minimapEncodedShapes)buffer.Parent);
+
+            var newData = ms.ToArray();
+
+            buffer.SetBytes(newData);
+        }
     }
 
     private CR2WBufferInfo WriteBuffer(BinaryWriter writer, RedBuffer buffer)

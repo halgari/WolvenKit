@@ -1,6 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using WolvenKit.Core.Attributes;
 using WolvenKit.Core.CRC;
 
 namespace WolvenKit.Core.Extensions
@@ -115,5 +119,135 @@ namespace WolvenKit.Core.Extensions
                 handle.Free();
             }
         }
+
+        #region BitField
+
+        public static T ReadBitfield<T>(this Stream stream) where T : struct
+        {
+            var fields = GetFieldInfos<T>();
+
+            byte byteReadJustNow = 0;
+            byte bitsLeft = 0;
+
+            object result = default(T);
+
+            foreach (var (fieldInfo, length) in fields)
+            {
+                ulong tmp = 0;
+
+                for (byte i = 0; i < length; i++)
+                {
+                    if (bitsLeft == 0)
+                    {
+                        var r = stream.ReadByte();
+                        if (r == -1)
+                        {
+                            throw new EndOfStreamException();
+                        }
+
+                        byteReadJustNow = (byte)r;
+                        bitsLeft = 8;
+                    }
+
+                    tmp |= (ulong)((byteReadJustNow >> (8 - bitsLeft--)) & 1) << i;
+                }
+
+                object tmp2;
+                switch (fieldInfo.FieldType.Name)
+                {
+                    case "Byte":
+                        tmp2 = Convert.ToByte(tmp);
+                        break;
+
+                    case "UInt16":
+                        tmp2 = Convert.ToUInt16(tmp);
+                        break;
+
+                    case "UInt32":
+                        tmp2 = Convert.ToUInt32(tmp);
+                        break;
+
+                    case "UInt64":
+                        tmp2 = Convert.ToUInt64(tmp);
+                        break;
+
+                    default:
+                        throw new Exception();
+                }
+
+                fieldInfo.SetValue(result, tmp2);
+            }
+
+            return (T)result;
+        }
+
+        public static void WriteBitfield<T>(this Stream stream, T data) where T : struct
+        {
+            var fields = GetFieldInfos<T>();
+
+            ulong byteToWrite = 0;
+            byte bitsUsed = 0;
+
+            foreach (var (fieldInfo, length) in fields)
+            {
+                var val = Convert.ToUInt64(fieldInfo.GetValue(data));
+                // TODO: Check if numberOfBits(val) <= length, currently every bit above gets just cut off
+
+                for (byte i = 0; i < length; i++)
+                {
+                    if (bitsUsed == 8)
+                    {
+                        stream.WriteByte((byte)byteToWrite);
+
+                        byteToWrite = 0;
+                        bitsUsed = 0;
+                    }
+
+                    byteToWrite |= ((val >> i) & 1) << bitsUsed++;
+                }
+            }
+
+            if (bitsUsed != 8)
+            {
+                throw new Exception();
+            }
+
+            stream.WriteByte((byte)byteToWrite);
+        }
+
+        private static Dictionary<FieldInfo, uint> GetFieldInfos<T>()
+        {
+            var fields = new Dictionary<FieldInfo, uint>();
+
+            foreach (var fieldInfo in typeof(T).GetFields())
+            {
+                if (fieldInfo.GetCustomAttribute<BitfieldLength>() is not { Length: var length })
+                {
+                    throw new Exception();
+                }
+
+                if (length is <= 0 or > 64)
+                {
+                    throw new Exception();
+                }
+
+                var sizeOfType = Marshal.SizeOf(fieldInfo.FieldType) * 8;
+                if (sizeOfType < length)
+                {
+                    throw new Exception();
+                }
+
+                fields.Add(fieldInfo, length);
+            }
+
+            if (fields.Values.Sum(x => x) % 8 != 0)
+            {
+                throw new Exception();
+            }
+
+            return fields;
+        }
+
+        #endregion BitField
     }
 }
