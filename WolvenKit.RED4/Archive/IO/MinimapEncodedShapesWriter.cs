@@ -25,6 +25,13 @@ public class MinimapEncodedShapesWriter : Red4Writer
             throw new Exception();
         }
 
+        parent.NumShapes = (uint)data.ShapeAddresses.Count;
+        parent.NumSpatialBuckets = (uint)data.Buckets.Count;
+        parent.NumUniqueGeometry = (uint)data.LocalBounds.Count;
+        parent.NumBorderPoints = (uint)data.Vertices.Count;
+        parent.NumFillPoints = (uint)data.VertexIndices.Count;
+        parent.NumOwners = (uint)data.Owners.Count;
+
         foreach (var shapeAddress in data.ShapeAddresses)
         {
             Write(shapeAddress.VertexIndex);
