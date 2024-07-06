@@ -286,8 +286,14 @@ public partial class AssetBrowserViewModel : ToolViewModel
             return;
         }
 
-        _progressService.IsIndeterminate = true;
 
+        if (SearchBarText is not null && SearchBarText.Contains("archive:") && !IsModBrowserActive())
+        {
+            return;
+        }
+
+        _progressService.IsIndeterminate = true;
+        
         await Task.Run(async () =>
         {
             using RedDBContext db = new();
